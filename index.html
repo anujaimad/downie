@@ -1,0 +1,96 @@
+<!--
+  Application: DOWNIE
+  Developed by: 1mad
+  100% Copyrights to 1mad. All rights reserved.
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DOWNIE</title>
+    <link rel="icon" href="logo.png" type="image/png">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        
+        <!-- Search Bar -->
+        <div class="search-bar">
+            <input type="text" id="url-input" placeholder="Paste media link here...">
+            <button id="fetch-btn" aria-label="Fetch Media">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="9 18 15 12 9 6"></polyline>
+                </svg>
+            </button>
+        </div>
+
+        <!-- Loading state -->
+        <div id="loading" class="hidden">
+            <div class="spinner"></div>
+            <p>Fetching details...</p>
+        </div>
+
+        <!-- Main Card -->
+        <div id="media-card" class="card hidden">
+            <div class="image-container">
+                <img id="media-thumbnail" src="" alt="Thumbnail">
+            </div>
+            
+            <div class="card-content">
+                <div class="title-row">
+                    <h2 id="media-title">Media Title</h2>
+                    <svg class="icon-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="12" y1="16" x2="12" y2="12"></line>
+                        <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                    </svg>
+                </div>
+                
+                <p class="description">Select your preferred media format and quality below. High resolution might take longer to process.</p>
+                
+                <div class="carousel-selector" id="format-pills">
+                    <div class="carousel-highlight"></div>
+                    <div class="carousel-track" id="format-carousel">
+                        <div class="spacer"></div>
+                        <div class="carousel-item" data-quality="2k">2K</div>
+                        <div class="carousel-item" data-quality="1080p">1080p</div>
+                        <div class="carousel-item active" data-quality="720p">720p</div>
+                        <div class="carousel-item" data-quality="480p">480p</div>
+                        <div class="carousel-item" data-quality="mp3">MP3</div>
+                        <div class="carousel-item" data-quality="png">PNG</div>
+                        <div class="spacer"></div>
+                    </div>
+                </div>
+
+                <div class="progress-section hidden" id="progress-container">
+                    <div class="progress-header">
+                        <span class="progress-title">Download progress</span>
+                        <span class="progress-speed" id="progressSpeed"></span>
+                    </div>
+                    <div class="progress-track">
+                        <div class="progress-fill" id="progress-fill">
+                            <span class="progress-text" id="progress-text">0%</span>
+                            <div class="progress-knob"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <button id="download-btn" class="primary-btn" disabled>Start Download</button>
+                <a id="save-file-btn" class="primary-btn hidden" href="" download>Save File to Device</a>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- DOWNIE Logo -->
+    <div class="logo-wrapper">
+        <img src="logo.png" alt="DOWNIE Logo" class="downie-logo">
+        <div class="tooltip">Designed with ❤️ by 1mad<br><small>© Copyright 1mad</small></div>
+    </div>
+    <!-- Confetti Library -->
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>
