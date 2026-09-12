@@ -3,7 +3,10 @@
   Developed by: 1mad
   100% Copyrights to 1mad. All rights reserved.
 */
-const API_BASE = window.location.protocol === 'file:' ? 'http://127.0.0.1:8080' : '';
+// IMPORTANT: GitHub Pages CANNOT run Python. 
+// If you publish to GitHub Pages, you MUST host `app.py` on Render.com or Heroku,
+// and change the API_BASE below to your new backend URL (e.g. 'https://downie-backend.onrender.com')
+const API_BASE = 'https://downie.onrender.com';
 
 const urlInput = document.getElementById('url-input');
 const fetchBtn = document.getElementById('fetch-btn');
@@ -123,7 +126,11 @@ fetchBtn.addEventListener('click', async () => {
             loadingIndicator.classList.add('hidden');
         }
     } catch (err) {
-        alert('An error occurred while fetching information: ' + err.message);
+        let errorMsg = err.message;
+        if (errorMsg.includes("is not valid JSON") || errorMsg.includes("Unexpected token '<'")) {
+            errorMsg = "Backend Error: GitHub Pages only hosts HTML! You must host your Python 'app.py' backend on a service like Render.com and update API_BASE in script.js to point to it.";
+        }
+        alert(errorMsg);
         loadingIndicator.classList.add('hidden');
         console.error(err);
     }
