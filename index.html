@@ -10,7 +10,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DOWNIE</title>
     <link rel="icon" href="logo.png" type="image/png">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Poppins:wght@400;500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -58,6 +58,9 @@
                         <div class="carousel-item" data-quality="1080p">1080p</div>
                         <div class="carousel-item active" data-quality="720p">720p</div>
                         <div class="carousel-item" data-quality="480p">480p</div>
+                        <div class="carousel-item" data-quality="360p">360p</div>
+                        <div class="carousel-item" data-quality="240p">240p</div>
+                        <div class="carousel-item" data-quality="144p">144p</div>
                         <div class="carousel-item" data-quality="mp3">MP3</div>
                         <div class="carousel-item" data-quality="png">PNG</div>
                         <div class="spacer"></div>
@@ -85,9 +88,16 @@
     </div>
 
     <!-- DOWNIE Logo -->
-    <div class="logo-wrapper">
+    <div class="logo-wrapper" id="logo-wrapper">
         <img src="logo.png" alt="DOWNIE Logo" class="downie-logo">
-        <div class="tooltip">Designed with ❤️ by 1mad<br><small>© Copyright 1mad</small></div>
+        <div class="message-bubble-container" id="message-bubble-container">
+            <div class="message-bubble">
+                <span class="message-text" id="message-text">Design with ♥️</span>
+                <svg class="message-tail" width="22" height="18" viewBox="0 0 22 18" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M0 18C4 18 7.5 15.5 10 12L22 0V18H0Z" fill="#E5E5EA"/>
+                </svg>
+            </div>
+        </div>
     </div>
     <!-- Confetti Library -->
     <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>

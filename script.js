@@ -3,6 +3,8 @@
   Developed by: 1mad
   100% Copyrights to 1mad. All rights reserved.
 */
+const API_BASE = window.location.protocol === 'file:' ? 'http://127.0.0.1:8080' : '';
+
 const urlInput = document.getElementById('url-input');
 const fetchBtn = document.getElementById('fetch-btn');
 const loadingIndicator = document.getElementById('loading');
@@ -92,7 +94,7 @@ fetchBtn.addEventListener('click', async () => {
     loadingIndicator.classList.remove('hidden');
 
     try {
-        const response = await fetch('http://127.0.0.1:5000/api/info', {
+        const response = await fetch(`${API_BASE}/api/info`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ url })
@@ -141,7 +143,7 @@ downloadBtn.addEventListener('click', async () => {
     saveFileBtn.classList.add('hidden');
     
     try {
-        const response = await fetch('http://127.0.0.1:5000/api/download', {
+        const response = await fetch(`${API_BASE}/api/download`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ 
@@ -174,7 +176,7 @@ async function checkProgress(downloadId) {
     const progressSpeed = document.getElementById('progressSpeed');
 
     try {
-        const response = await fetch(`/api/progress/${downloadId}`);
+        const response = await fetch(`${API_BASE}/api/progress/${downloadId}`);
         const data = await response.json();
         
         if (response.ok) {
@@ -206,7 +208,7 @@ async function checkProgress(downloadId) {
                     });
                 }
                 
-                saveFileBtn.href = `/api/file/${downloadId}`;
+                saveFileBtn.href = `${API_BASE}/api/file/${downloadId}`;
                 saveFileBtn.classList.remove('hidden');
             } else if (data.status === 'error') {
                 clearInterval(progressInterval);
@@ -220,3 +222,71 @@ async function checkProgress(downloadId) {
         console.error('Error checking progress:', err);
     }
 }
+
+// Message Bubble Interaction & Sequence
+const logoWrapper = document.getElementById('logo-wrapper');
+const bubbleContainer = document.getElementById('message-bubble-container');
+const messageText = document.getElementById('message-text');
+
+let sequenceTimeout1, sequenceTimeout2, hideTimeout;
+let isAnimating = false;
+
+const msg1 = `Design with ♥️`;
+const msg2 = `© 1mad 2026`;
+
+function startMessageSequence() {
+    if (isAnimating) return;
+    isAnimating = true;
+    
+    clearTimeout(sequenceTimeout1);
+    clearTimeout(sequenceTimeout2);
+    clearTimeout(hideTimeout);
+
+    // Reset to message 1
+    messageText.style.opacity = 0;
+    messageText.style.transform = 'scale(0.9)';
+    
+    setTimeout(() => {
+        messageText.innerHTML = msg1;
+        messageText.style.opacity = 1;
+        messageText.style.transform = 'scale(1)';
+    }, 200);
+
+    bubbleContainer.classList.add('show');
+
+    // After 5s, switch to message 2
+    sequenceTimeout1 = setTimeout(() => {
+        messageText.style.opacity = 0;
+        messageText.style.transform = 'scale(0.9)';
+        
+        sequenceTimeout2 = setTimeout(() => {
+            messageText.innerHTML = msg2;
+            messageText.style.opacity = 1;
+            messageText.style.transform = 'scale(1)';
+        }, 300); // 300ms fade out before swapping
+        
+    }, 5000);
+
+    // After 10s total (5s after msg2), hide the bubble
+    hideTimeout = setTimeout(() => {
+        bubbleContainer.classList.remove('show');
+        setTimeout(() => { isAnimating = false; }, 400); // Wait for transition
+    }, 10000);
+}
+
+// Support both hover and tap
+logoWrapper.addEventListener('mouseenter', startMessageSequence);
+logoWrapper.addEventListener('click', (e) => {
+    e.stopPropagation();
+    startMessageSequence();
+});
+
+document.addEventListener('click', () => {
+    if (bubbleContainer.classList.contains('show')) {
+        bubbleContainer.classList.remove('show');
+        isAnimating = false;
+        clearTimeout(sequenceTimeout1);
+        clearTimeout(sequenceTimeout2);
+        clearTimeout(hideTimeout);
+    }
+});

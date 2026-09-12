@@ -2,3 +2,7 @@ venv/
 downloads/
 __pycache__/
 .DS_Store
+venv/
+downloads/
+__pycache__/
+.DS_Store
