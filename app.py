@@ -50,6 +50,17 @@ def get_info():
         return jsonify({"error": "Invalid URL provided."}), 400
 
     try:
+        if 'youtube.com' in url or 'youtu.be' in url:
+            import requests
+            oembed_url = f"https://www.youtube.com/oembed?url={url}&format=json"
+            resp = requests.get(oembed_url, timeout=10)
+            if resp.status_code == 200:
+                data = resp.json()
+                return jsonify({
+                    "title": data.get('title', 'Unknown Title'),
+                    "thumbnail": data.get('thumbnail_url', '')
+                })
+
         ydl_opts = {
             'quiet': True,
             'no_warnings': True,
@@ -59,8 +70,6 @@ def get_info():
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             
-            # extract_flat might only return id and title for youtube playlists/videos,
-            # but usually it gets the thumbnail too. If thumbnail is missing, fallback to generated one.
             thumbnail = info.get('thumbnail')
             if not thumbnail and info.get('id'):
                 thumbnail = f"https://img.youtube.com/vi/{info['id']}/maxresdefault.jpg"
