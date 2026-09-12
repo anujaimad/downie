@@ -91,22 +91,33 @@ def download_task(download_id, url, quality):
         if 'youtube.com' in url or 'youtu.be' in url:
             try:
                 from pytubefix import YouTube
+                import requests
                 
-                def on_progress(stream, chunk, bytes_remaining):
-                    total_size = stream.filesize
-                    bytes_downloaded = total_size - bytes_remaining
-                    percentage = (bytes_downloaded / total_size) * 100
-                    if downloads[download_id]['status'] == 'downloading':
-                        downloads[download_id]['progress'] = f"{percentage:.1f}%"
-                        downloads[download_id]['speed'] = 'Downloading...'
+                def download_stream(stream_url, out_path, step_name):
+                    res = requests.get(stream_url, stream=True, timeout=30)
+                    res.raise_for_status()
+                    total_size = int(res.headers.get('content-length', 0))
+                    bytes_dl = 0
+                    with open(out_path, 'wb') as f:
+                        for chunk in res.iter_content(chunk_size=65536):
+                            if chunk:
+                                f.write(chunk)
+                                bytes_dl += len(chunk)
+                                if total_size > 0 and downloads[download_id]['status'] == 'downloading':
+                                    pct = (bytes_dl / total_size) * 100
+                                    downloads[download_id]['progress'] = f"{pct:.1f}%"
+                                    downloads[download_id]['speed'] = step_name
 
-                yt = YouTube(url, on_progress_callback=on_progress, client='ANDROID')
+                yt = YouTube(url, client='ANDROID')
                 
                 if quality == 'mp3':
                     stream = yt.streams.get_audio_only()
                     if stream:
-                        out_file = stream.download(output_path=DOWNLOAD_DIR, filename_prefix=f"{download_id}_")
-                        final_file = out_file.rsplit('.', 1)[0] + '.mp3'
+                        out_file = os.path.join(DOWNLOAD_DIR, f"{download_id}_temp.m4a")
+                        safe_title = "".join(c for c in yt.title if c.isalnum() or c in (" ", "-", "_")).rstrip()
+                        final_file = os.path.join(DOWNLOAD_DIR, f"{download_id}_{safe_title}.mp3")
+                        downloads[download_id]['speed'] = 'Fetching audio...'
+                        download_stream(stream.url, out_file, 'Downloading Audio...')
                         downloads[download_id]['speed'] = 'Converting to MP3...'
                         subprocess.run([FFMPEG_PATH, '-y', '-i', out_file, '-q:a', '0', '-map', 'a', final_file], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                         if os.path.exists(out_file) and out_file != final_file: os.remove(out_file)
@@ -116,10 +127,13 @@ def download_task(download_id, url, quality):
                         downloads[download_id]['speed'] = 'Done'
                         return
                 else:
+                    safe_title = "".join(c for c in yt.title if c.isalnum() or c in (" ", "-", "_")).rstrip()
                     height = int(''.join(filter(str.isdigit, quality))) if any(c.isdigit() for c in quality) else 720
                     prog_stream = yt.streams.filter(progressive=True, res=f"{height}p").first()
                     if prog_stream:
-                        out_file = prog_stream.download(output_path=DOWNLOAD_DIR, filename_prefix=f"{download_id}_")
+                        out_file = os.path.join(DOWNLOAD_DIR, f"{download_id}_{safe_title}.mp4")
+                        downloads[download_id]['speed'] = 'Fetching video...'
+                        download_stream(prog_stream.url, out_file, 'Downloading Video...')
                         downloads[download_id]['filename'] = out_file
                         downloads[download_id]['status'] = 'completed'
                         downloads[download_id]['progress'] = '100%'
@@ -131,12 +145,12 @@ def download_task(download_id, url, quality):
                             v_stream = yt.streams.filter(type='video').order_by('resolution').desc().first()
                         a_stream = yt.streams.get_audio_only()
                         if v_stream and a_stream:
-                            downloads[download_id]['speed'] = 'Downloading Video...'
-                            v_file = v_stream.download(output_path=DOWNLOAD_DIR, filename_prefix=f"v_{download_id}_")
-                            downloads[download_id]['speed'] = 'Downloading Audio...'
-                            a_file = a_stream.download(output_path=DOWNLOAD_DIR, filename_prefix=f"a_{download_id}_")
+                            v_file = os.path.join(DOWNLOAD_DIR, f"v_{download_id}.mp4")
+                            a_file = os.path.join(DOWNLOAD_DIR, f"a_{download_id}.m4a")
+                            download_stream(v_stream.url, v_file, 'Downloading Video...')
+                            download_stream(a_stream.url, a_file, 'Downloading Audio...')
                             downloads[download_id]['speed'] = 'Merging...'
-                            final_file = os.path.join(DOWNLOAD_DIR, f"{download_id}_{yt.title}.mp4")
+                            final_file = os.path.join(DOWNLOAD_DIR, f"{download_id}_{safe_title}.mp4")
                             subprocess.run([FFMPEG_PATH, '-y', '-i', v_file, '-i', a_file, '-c:v', 'copy', '-c:a', 'aac', final_file], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                             if os.path.exists(v_file): os.remove(v_file)
                             if os.path.exists(a_file): os.remove(a_file)
@@ -146,7 +160,8 @@ def download_task(download_id, url, quality):
                             downloads[download_id]['speed'] = 'Done'
                             return
             except Exception as e:
-                print(f"pytubefix failed, falling back to yt-dlp: {e}")
+                # Do NOT swallow the error, throw it so it is caught by the main download_task try block!
+                raise Exception(f"YouTube Engine Failed: {str(e)}")
 
         # Fallback to yt-dlp
         def ytdl_progress_hook(d):
