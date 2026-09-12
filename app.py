@@ -89,47 +89,31 @@ def download_task(download_id, url, quality):
 
         # Try pytubefix for YouTube first (generates PO Tokens to bypass 403)
         if 'youtube.com' in url or 'youtu.be' in url:
-            cookies_env = os.environ.get('YOUTUBE_COOKIES', '')
-            cookie_file = None
-            if cookies_env:
-                cookie_file = os.path.join(DOWNLOAD_DIR, 'cookies.txt')
-                with open(cookie_file, 'w') as f:
-                    f.write(cookies_env.replace('\\n', '\n'))
-            
-            # If cookies are provided, yt-dlp is much more reliable
-            if cookie_file:
-                def ytdl_progress_hook(d):
-                    if d['status'] == 'downloading':
-                        downloads[download_id]['progress'] = d.get('_percent_str', '0%').strip()
-                        downloads[download_id]['speed'] = d.get('_speed_str', 'N/A').strip()
-                
-                height = int(''.join(filter(str.isdigit, quality))) if any(c.isdigit() for c in quality) else 720
-                
-                ydl_opts = {
-                    'outtmpl': os.path.join(DOWNLOAD_DIR, f"{download_id}_%(title)s.%(ext)s"),
-                    'format': 'bestaudio/best' if quality == 'mp3' else f'bestvideo[height<={height}]+bestaudio/best',
-                    'cookiefile': cookie_file,
-                    'progress_hooks': [ytdl_progress_hook],
-                    'ffmpeg_location': FFMPEG_PATH,
-                    'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3'}] if quality == 'mp3' else []
-                }
-                
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    info = ydl.extract_info(url, download=True)
-                    if quality == 'mp3':
-                        final_file = os.path.join(DOWNLOAD_DIR, f"{download_id}_{info['title']}.mp3")
-                    else:
-                        ext = info['ext'] if 'ext' in info else 'mp4'
-                        final_file = os.path.join(DOWNLOAD_DIR, f"{download_id}_{info['title']}.{ext}")
-                    downloads[download_id]['filename'] = final_file
-                    downloads[download_id]['status'] = 'completed'
-                    downloads[download_id]['progress'] = '100%'
-                    downloads[download_id]['speed'] = 'Done'
-                return
-
             try:
                 from pytubefix import YouTube
+                from pytubefix import request as pytubefix_request
                 import requests
+                
+                # Setup Cookies in pytubefix if provided
+                cookies_env = os.environ.get('YOUTUBE_COOKIES', '')
+                if cookies_env:
+                    # Parse Netscape cookies format
+                    cookies_list = []
+                    for line in cookies_env.replace('\\n', '\n').strip().split('\n'):
+                        if line.startswith('#') or not line.strip():
+                            continue
+                        parts = line.strip().split('\t')
+                        if len(parts) >= 7:
+                            cookies_list.append(f"{parts[5]}={parts[6]}")
+                    cookie_header = "; ".join(cookies_list)
+                    
+                    if cookie_header:
+                        orig_Request = pytubefix_request.Request
+                        def PatchedRequest(*args, **kwargs):
+                            req = orig_Request(*args, **kwargs)
+                            req.add_header('Cookie', cookie_header)
+                            return req
+                        pytubefix_request.Request = PatchedRequest
                 
                 def download_stream(stream_url, out_path, step_name):
                     res = requests.get(stream_url, stream=True, timeout=30)
