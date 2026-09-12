@@ -87,6 +87,68 @@ def download_task(download_id, url, quality):
         downloads[download_id]['progress'] = '0%'
         downloads[download_id]['speed'] = 'Connecting...'
 
+        # Try pytubefix for YouTube first (generates PO Tokens to bypass 403)
+        if 'youtube.com' in url or 'youtu.be' in url:
+            try:
+                from pytubefix import YouTube
+                
+                def on_progress(stream, chunk, bytes_remaining):
+                    total_size = stream.filesize
+                    bytes_downloaded = total_size - bytes_remaining
+                    percentage = (bytes_downloaded / total_size) * 100
+                    if downloads[download_id]['status'] == 'downloading':
+                        downloads[download_id]['progress'] = f"{percentage:.1f}%"
+                        downloads[download_id]['speed'] = 'Downloading...'
+
+                yt = YouTube(url, on_progress_callback=on_progress, client='ANDROID')
+                
+                if quality == 'mp3':
+                    stream = yt.streams.get_audio_only()
+                    if stream:
+                        out_file = stream.download(output_path=DOWNLOAD_DIR, filename_prefix=f"{download_id}_")
+                        final_file = out_file.rsplit('.', 1)[0] + '.mp3'
+                        downloads[download_id]['speed'] = 'Converting to MP3...'
+                        subprocess.run([FFMPEG_PATH, '-y', '-i', out_file, '-q:a', '0', '-map', 'a', final_file], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        if os.path.exists(out_file) and out_file != final_file: os.remove(out_file)
+                        downloads[download_id]['filename'] = final_file
+                        downloads[download_id]['status'] = 'completed'
+                        downloads[download_id]['progress'] = '100%'
+                        downloads[download_id]['speed'] = 'Done'
+                        return
+                else:
+                    height = int(''.join(filter(str.isdigit, quality))) if any(c.isdigit() for c in quality) else 720
+                    prog_stream = yt.streams.filter(progressive=True, res=f"{height}p").first()
+                    if prog_stream:
+                        out_file = prog_stream.download(output_path=DOWNLOAD_DIR, filename_prefix=f"{download_id}_")
+                        downloads[download_id]['filename'] = out_file
+                        downloads[download_id]['status'] = 'completed'
+                        downloads[download_id]['progress'] = '100%'
+                        downloads[download_id]['speed'] = 'Done'
+                        return
+                    else:
+                        v_stream = yt.streams.filter(type='video', res=f"{height}p").first()
+                        if not v_stream:
+                            v_stream = yt.streams.filter(type='video').order_by('resolution').desc().first()
+                        a_stream = yt.streams.get_audio_only()
+                        if v_stream and a_stream:
+                            downloads[download_id]['speed'] = 'Downloading Video...'
+                            v_file = v_stream.download(output_path=DOWNLOAD_DIR, filename_prefix=f"v_{download_id}_")
+                            downloads[download_id]['speed'] = 'Downloading Audio...'
+                            a_file = a_stream.download(output_path=DOWNLOAD_DIR, filename_prefix=f"a_{download_id}_")
+                            downloads[download_id]['speed'] = 'Merging...'
+                            final_file = os.path.join(DOWNLOAD_DIR, f"{download_id}_{yt.title}.mp4")
+                            subprocess.run([FFMPEG_PATH, '-y', '-i', v_file, '-i', a_file, '-c:v', 'copy', '-c:a', 'aac', final_file], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            if os.path.exists(v_file): os.remove(v_file)
+                            if os.path.exists(a_file): os.remove(a_file)
+                            downloads[download_id]['filename'] = final_file
+                            downloads[download_id]['status'] = 'completed'
+                            downloads[download_id]['progress'] = '100%'
+                            downloads[download_id]['speed'] = 'Done'
+                            return
+            except Exception as e:
+                print(f"pytubefix failed, falling back to yt-dlp: {e}")
+
+        # Fallback to yt-dlp
         def ytdl_progress_hook(d):
             if d['status'] == 'downloading':
                 p = d.get('_percent_str', '0%').strip()

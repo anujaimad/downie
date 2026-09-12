@@ -223,6 +223,10 @@ async function checkProgress(downloadId) {
                 progressText.style.opacity = '1';
                 progressFill.style.background = '#EF4444'; // Red error color
                 if (progressSpeed) progressSpeed.textContent = "Failed";
+                if (data.error && !window.hasAlerted) {
+                    alert("Download failed: " + data.error);
+                    window.hasAlerted = true;
+                }
             }
         }
     } catch (err) {
