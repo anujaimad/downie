@@ -109,9 +109,8 @@ def download_task(download_id, url, quality):
             'quiet': True,
             'no_warnings': True,
             'ffmpeg_location': FFMPEG_PATH,
-            'allowed_extractors': ['default'],
             'concurrent_fragment_downloads': 5,
-            'extractor_args': {'youtube': {'player_client': ['android']}}
+            'extractor_args': {'youtube': {'player_client': ['ios', 'android', 'web']}}
         }
         
         if quality == 'mp3':
