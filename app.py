@@ -14,12 +14,12 @@ import time
 import re
 from urllib.parse import urlparse
 
-FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
-
 app = Flask(__name__, static_folder='.', static_url_path='')
 CORS(app)
 
 DOWNLOAD_DIR = "downloads"
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 downloads = {}
@@ -108,7 +108,21 @@ def download_task(download_id, url, quality):
                                     downloads[download_id]['progress'] = f"{pct:.1f}%"
                                     downloads[download_id]['speed'] = step_name
 
-                yt = YouTube(url, client='ANDROID')
+                yt = None
+                last_err = None
+                for c in ['WEB', 'ANDROID', 'MWEB', 'TV', 'IOS']:
+                    try:
+                        yt_attempt = YouTube(url, client=c)
+                        # Accessing streams triggers the API call
+                        _ = yt_attempt.streams
+                        yt = yt_attempt
+                        break
+                    except Exception as e:
+                        last_err = e
+                        continue
+                        
+                if not yt:
+                    raise Exception(f"All YouTube clients failed (Blocked by YouTube). Last error: {str(last_err)}")
                 
                 if quality == 'mp3':
                     stream = yt.streams.get_audio_only()

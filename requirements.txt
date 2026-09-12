@@ -6,3 +6,4 @@ pytubefix
 requests
 urllib3<2
 yt-dlp
+imageio-ffmpeg
