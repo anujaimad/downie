@@ -2,7 +2,6 @@ Flask
 flask-cors
 gunicorn
 imageio-ffmpeg
-pytubefix
 requests
 urllib3<2
 yt-dlp

@@ -50,24 +50,24 @@ def get_info():
         return jsonify({"error": "Invalid URL provided."}), 400
 
     try:
-        if 'youtube.com' in url or 'youtu.be' in url:
-            from pytubefix import YouTube
-            yt = YouTube(url, use_oauth=False, allow_oauth_cache=True)
-            return jsonify({
-                "title": yt.title,
-                "thumbnail": yt.thumbnail_url
-            })
-            
         ydl_opts = {
             'quiet': True,
             'no_warnings': True,
-            'extract_flat': True
+            'extract_flat': True,
+            'extractor_args': {'youtube': {'player_client': ['android']}}
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
+            
+            # extract_flat might only return id and title for youtube playlists/videos,
+            # but usually it gets the thumbnail too. If thumbnail is missing, fallback to generated one.
+            thumbnail = info.get('thumbnail')
+            if not thumbnail and info.get('id'):
+                thumbnail = f"https://img.youtube.com/vi/{info['id']}/maxresdefault.jpg"
+                
             return jsonify({
                 "title": info.get('title', 'Unknown Title'),
-                "thumbnail": info.get('thumbnail')
+                "thumbnail": thumbnail
             })
     except Exception as e:
         return jsonify({"error": f"Failed to fetch: {str(e)}"}), 500
