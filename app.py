@@ -97,14 +97,27 @@ def download_task(download_id, url, quality):
                 # Setup Cookies in pytubefix if provided
                 cookies_env = os.environ.get('YOUTUBE_COOKIES', '')
                 if cookies_env:
-                    # Parse Netscape cookies format
                     cookies_list = []
-                    for line in cookies_env.replace('\\n', '\n').strip().split('\n'):
-                        if line.startswith('#') or not line.strip():
-                            continue
-                        parts = line.strip().split('\t')
-                        if len(parts) >= 7:
-                            cookies_list.append(f"{parts[5]}={parts[6]}")
+                    # Try parsing as JSON first
+                    try:
+                        import json
+                        data = json.loads(cookies_env)
+                        if isinstance(data, list):
+                            for item in data:
+                                if 'name' in item and 'value' in item:
+                                    cookies_list.append(f"{item['name']}={item['value']}")
+                    except Exception:
+                        pass
+                    
+                    # If not JSON or empty, try Netscape format
+                    if not cookies_list:
+                        for line in cookies_env.replace('\\n', '\n').strip().split('\n'):
+                            if line.startswith('#') or not line.strip():
+                                continue
+                            parts = line.strip().split('\t')
+                            if len(parts) >= 7:
+                                cookies_list.append(f"{parts[5]}={parts[6]}")
+                                
                     cookie_header = "; ".join(cookies_list)
                     
                     if cookie_header:
@@ -144,7 +157,10 @@ def download_task(download_id, url, quality):
                         continue
                         
                 if not yt:
-                    raise Exception(f"All YouTube clients failed (Blocked by YouTube). Last error: {str(last_err)}")
+                    err_str = str(last_err)
+                    if '403' in err_str or 'LoginRequired' in err_str:
+                        raise Exception("IP BLOCKED! YouTube has banned Render's Datacenter IP. You MUST add your YouTube Cookies to 'YOUTUBE_COOKIES' in Render Environment Variables. Use 'Get cookies.txt LOCALLY' chrome extension.")
+                    raise Exception(f"All YouTube clients failed (Blocked by YouTube). Last error: {err_str}")
                 
                 if quality == 'mp3':
                     stream = yt.streams.get_audio_only()
