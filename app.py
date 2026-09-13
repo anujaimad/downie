@@ -81,141 +81,98 @@ def get_info():
     except Exception as e:
         return jsonify({"error": f"Failed to fetch: {str(e)}"}), 500
 
+
 def download_task(download_id, url, quality):
     try:
         downloads[download_id]['status'] = 'downloading'
         downloads[download_id]['progress'] = '0%'
         downloads[download_id]['speed'] = 'Connecting...'
 
-        # Try pytubefix for YouTube first (generates PO Tokens to bypass 403)
         if 'youtube.com' in url or 'youtu.be' in url:
-            try:
-                from pytubefix import YouTube
-                from pytubefix import request as pytubefix_request
-                import requests
+            # Native API bypass for YouTube to completely avoid Datacenter IP Blocks!
+            import requests
+            import time
+            from werkzeug.utils import secure_filename
+            
+            q_map = {
+                'mp3': 'mp3',
+                '2k': '1440',
+                '1080p': '1080',
+                '720p': '720',
+                '480p': '480',
+                '360p': '360',
+                '240p': '360',
+                '144p': '360'
+            }
+            fmt = q_map.get(quality, '720')
+            
+            downloads[download_id]['speed'] = 'Processing on external server...'
+            r = requests.get(f"https://loader.to/ajax/download.php?url={url}&format={fmt}")
+            res = r.json()
+            if 'id' not in res:
+                raise Exception(f"Bypass Server Failed: {res.get('message', 'Unknown Error')}")
                 
-                # Setup Cookies in pytubefix if provided
-                cookies_env = os.environ.get('YOUTUBE_COOKIES', '')
-                if cookies_env:
-                    cookies_list = []
-                    # Try parsing as JSON first
-                    try:
-                        import json
-                        data = json.loads(cookies_env)
-                        if isinstance(data, list):
-                            for item in data:
-                                if 'name' in item and 'value' in item:
-                                    cookies_list.append(f"{item['name']}={item['value']}")
-                    except Exception:
-                        pass
+            task_id = res['id']
+            download_url = None
+            title = "YouTube_Video"
+            
+            while True:
+                p = requests.get(f"https://loader.to/ajax/progress.php?id={task_id}")
+                data = p.json()
+                
+                progress_val = data.get('progress', 0)
+                pct = (progress_val / 1000) * 100
+                if pct > 0:
+                    downloads[download_id]['progress'] = f"{pct:.1f}%"
+                    downloads[download_id]['speed'] = 'Downloading stream...'
+                
+                if data.get('success') == 1 and data.get('download_url'):
+                    download_url = data['download_url']
+                    title = data.get('title', 'YouTube_Video')
+                    break
                     
-                    # If not JSON or empty, try Netscape format
-                    if not cookies_list:
-                        for line in cookies_env.replace('\\n', '\n').strip().split('\n'):
-                            if line.startswith('#') or not line.strip():
-                                continue
-                            parts = line.strip().split('\t')
-                            if len(parts) >= 7:
-                                cookies_list.append(f"{parts[5]}={parts[6]}")
-                                
-                    cookie_header = "; ".join(cookies_list)
-                    
-                    if cookie_header:
-                        orig_Request = pytubefix_request.Request
-                        def PatchedRequest(*args, **kwargs):
-                            req = orig_Request(*args, **kwargs)
-                            req.add_header('Cookie', cookie_header)
-                            return req
-                        pytubefix_request.Request = PatchedRequest
+                time.sleep(1.5)
                 
-                def download_stream(stream_url, out_path, step_name):
-                    res = requests.get(stream_url, stream=True, timeout=30)
-                    res.raise_for_status()
-                    total_size = int(res.headers.get('content-length', 0))
-                    bytes_dl = 0
-                    with open(out_path, 'wb') as f:
-                        for chunk in res.iter_content(chunk_size=65536):
-                            if chunk:
-                                f.write(chunk)
-                                bytes_dl += len(chunk)
-                                if total_size > 0 and downloads[download_id]['status'] == 'downloading':
-                                    pct = (bytes_dl / total_size) * 100
-                                    downloads[download_id]['progress'] = f"{pct:.1f}%"
-                                    downloads[download_id]['speed'] = step_name
-
-                yt = None
-                last_err = None
-                for c in ['WEB', 'ANDROID', 'MWEB', 'TV', 'IOS']:
-                    try:
-                        yt_attempt = YouTube(url, client=c)
-                        # Accessing streams triggers the API call
-                        _ = yt_attempt.streams
-                        yt = yt_attempt
-                        break
-                    except Exception as e:
-                        last_err = e
-                        continue
-                        
-                if not yt:
-                    err_str = str(last_err)
-                    if '403' in err_str or 'LoginRequired' in err_str:
-                        raise Exception("IP BLOCKED! YouTube has banned Render's Datacenter IP. You MUST add your YouTube Cookies to 'YOUTUBE_COOKIES' in Render Environment Variables. Use 'Get cookies.txt LOCALLY' chrome extension.")
-                    raise Exception(f"All YouTube clients failed (Blocked by YouTube). Last error: {err_str}")
+            if not download_url:
+                raise Exception("Failed to extract external download URL")
                 
-                if quality == 'mp3':
-                    stream = yt.streams.get_audio_only()
-                    if stream:
-                        out_file = os.path.join(DOWNLOAD_DIR, f"{download_id}_temp.m4a")
-                        safe_title = "".join(c for c in yt.title if c.isalnum() or c in (" ", "-", "_")).rstrip()
-                        final_file = os.path.join(DOWNLOAD_DIR, f"{download_id}_{safe_title}.mp3")
-                        downloads[download_id]['speed'] = 'Fetching audio...'
-                        download_stream(stream.url, out_file, 'Downloading Audio...')
-                        downloads[download_id]['speed'] = 'Converting to MP3...'
-                        subprocess.run([FFMPEG_PATH, '-y', '-i', out_file, '-q:a', '0', '-map', 'a', final_file], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                        if os.path.exists(out_file) and out_file != final_file: os.remove(out_file)
-                        downloads[download_id]['filename'] = final_file
-                        downloads[download_id]['status'] = 'completed'
-                        downloads[download_id]['progress'] = '100%'
-                        downloads[download_id]['speed'] = 'Done'
-                        return
-                else:
-                    safe_title = "".join(c for c in yt.title if c.isalnum() or c in (" ", "-", "_")).rstrip()
-                    height = int(''.join(filter(str.isdigit, quality))) if any(c.isdigit() for c in quality) else 720
-                    prog_stream = yt.streams.filter(progressive=True, res=f"{height}p").first()
-                    if prog_stream:
-                        out_file = os.path.join(DOWNLOAD_DIR, f"{download_id}_{safe_title}.mp4")
-                        downloads[download_id]['speed'] = 'Fetching video...'
-                        download_stream(prog_stream.url, out_file, 'Downloading Video...')
-                        downloads[download_id]['filename'] = out_file
-                        downloads[download_id]['status'] = 'completed'
-                        downloads[download_id]['progress'] = '100%'
-                        downloads[download_id]['speed'] = 'Done'
-                        return
+            safe_title = secure_filename(title)
+            if not safe_title: safe_title = "Media_File"
+            safe_title = safe_title[:100]
+            downloads[download_id]['title'] = safe_title
+            
+            ext = ".mp3" if quality == 'mp3' else ".mp4"
+            filename = f"{download_id}_{safe_title}{ext}"
+            filepath = os.path.join(DOWNLOAD_DIR, filename)
+            
+            downloads[download_id]['speed'] = 'Transferring to your device...'
+            # Stream the file to the Render server
+            with requests.get(download_url, stream=True) as r_stream:
+                r_stream.raise_for_status()
+                total_length = r_stream.headers.get('content-length')
+                
+                with open(filepath, 'wb') as f_out:
+                    if total_length is None: # no content length header
+                        f_out.write(r_stream.content)
+                        downloads[download_id]['progress'] = "100%"
                     else:
-                        v_stream = yt.streams.filter(type='video', res=f"{height}p").first()
-                        if not v_stream:
-                            v_stream = yt.streams.filter(type='video').order_by('resolution').desc().first()
-                        a_stream = yt.streams.get_audio_only()
-                        if v_stream and a_stream:
-                            v_file = os.path.join(DOWNLOAD_DIR, f"v_{download_id}.mp4")
-                            a_file = os.path.join(DOWNLOAD_DIR, f"a_{download_id}.m4a")
-                            download_stream(v_stream.url, v_file, 'Downloading Video...')
-                            download_stream(a_stream.url, a_file, 'Downloading Audio...')
-                            downloads[download_id]['speed'] = 'Merging...'
-                            final_file = os.path.join(DOWNLOAD_DIR, f"{download_id}_{safe_title}.mp4")
-                            subprocess.run([FFMPEG_PATH, '-y', '-i', v_file, '-i', a_file, '-c:v', 'copy', '-c:a', 'aac', final_file], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                            if os.path.exists(v_file): os.remove(v_file)
-                            if os.path.exists(a_file): os.remove(a_file)
-                            downloads[download_id]['filename'] = final_file
-                            downloads[download_id]['status'] = 'completed'
-                            downloads[download_id]['progress'] = '100%'
-                            downloads[download_id]['speed'] = 'Done'
-                            return
-            except Exception as e:
-                # Do NOT swallow the error, throw it so it is caught by the main download_task try block!
-                raise Exception(f"YouTube Engine Failed: {str(e)}")
+                        dl = 0
+                        total_length = int(total_length)
+                        for data in r_stream.iter_content(chunk_size=4096):
+                            dl += len(data)
+                            f_out.write(data)
+                            done = int(50 * dl / total_length)
+                            # Actually, just show percentage of the file transfer
+                            pct = (dl / total_length) * 100
+                            downloads[download_id]['progress'] = f"{pct:.1f}%"
+                            
+            downloads[download_id]['filename'] = filepath
+            downloads[download_id]['status'] = 'completed'
+            downloads[download_id]['progress'] = '100%'
+            downloads[download_id]['speed'] = 'Done'
+            return
 
-        # Fallback to yt-dlp
+        # Fallback to yt-dlp for everything else (TikTok, Insta, FB, etc)
         def ytdl_progress_hook(d):
             if d['status'] == 'downloading':
                 p = d.get('_percent_str', '0%').strip()
@@ -239,7 +196,6 @@ def download_task(download_id, url, quality):
             'no_warnings': True,
             'ffmpeg_location': FFMPEG_PATH,
             'concurrent_fragment_downloads': 5,
-            'extractor_args': {'youtube': {'player_client': ['ios', 'android', 'web']}}
         }
         
         if quality == 'mp3':
@@ -278,6 +234,7 @@ def download_task(download_id, url, quality):
         else:
             ydl_opts['format'] = 'best'
         
+        import yt_dlp
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             title = info.get('title', 'Media')
