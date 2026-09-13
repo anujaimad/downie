@@ -224,39 +224,8 @@ async function checkProgress(downloadId) {
                 progressFill.style.background = '#EF4444'; // Red error color
                 if (progressSpeed) progressSpeed.textContent = "Failed";
                 if (data.error && !window.hasAlerted) {
+                    alert("Download failed: " + data.error);
                     window.hasAlerted = true;
-                    if (data.error.includes("YouTube") || data.error.includes("IP BLOCKED")) {
-                        progressText.textContent = 'Backend Blocked. Loading External Downloader...';
-                        progressFill.style.background = '#F59E0B'; // Orange warning color
-                        
-                        // Inject external downloader widget
-                        const format = document.getElementById('format-select').value === 'mp4' ? 'mp4' : 'mp3';
-                        const widgetUrl = `https://loader.to/api/button/?url=${encodeURIComponent(currentUrl)}&f=${format}`;
-                        
-                        const widgetContainer = document.createElement('div');
-                        widgetContainer.style.marginTop = '20px';
-                        widgetContainer.style.width = '100%';
-                        widgetContainer.style.height = '60px';
-                        widgetContainer.style.borderRadius = '8px';
-                        widgetContainer.style.overflow = 'hidden';
-                        
-                        const iframe = document.createElement('iframe');
-                        iframe.src = widgetUrl;
-                        iframe.style.width = '100%';
-                        iframe.style.height = '100%';
-                        iframe.style.border = 'none';
-                        iframe.scrolling = 'no';
-                        
-                        widgetContainer.appendChild(iframe);
-                        
-                        // Append after progress bar
-                        const progressContainer = document.getElementById('progress-container');
-                        if (progressContainer) {
-                            progressContainer.parentNode.insertBefore(widgetContainer, progressContainer.nextSibling);
-                        }
-                    } else {
-                        alert("Download failed: " + data.error);
-                    }
                 }
             }
         }
