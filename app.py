@@ -90,6 +90,85 @@ def download_task(download_id, url, quality):
         downloads[download_id]['progress'] = '0%'
         downloads[download_id]['speed'] = 'Connecting...'
 
+        if 'youtube.com' in url or 'youtu.be' in url:
+            from pytubefix import YouTube
+            import time
+            
+            # Helper to calculate speed
+            downloads[download_id]['_last_time'] = time.time()
+            downloads[download_id]['_last_bytes'] = 0
+            
+            def pytube_progress(stream, chunk, bytes_remaining):
+                if downloads[download_id]['status'] != 'downloading':
+                    return
+                total_size = stream.filesize
+                bytes_downloaded = total_size - bytes_remaining
+                percentage = (bytes_downloaded / total_size) * 100
+                downloads[download_id]['progress'] = f"{percentage:.1f}%"
+                
+                # Calculate speed
+                current_time = time.time()
+                time_diff = current_time - downloads[download_id].get('_last_time', current_time)
+                if time_diff > 1.0:
+                    bytes_diff = bytes_downloaded - downloads[download_id].get('_last_bytes', 0)
+                    speed_mbps = (bytes_diff / time_diff) / (1024 * 1024)
+                    downloads[download_id]['speed'] = f"{speed_mbps:.1f} MiB/s"
+                    downloads[download_id]['_last_time'] = current_time
+                    downloads[download_id]['_last_bytes'] = bytes_downloaded
+
+            yt = YouTube(url, on_progress_callback=pytube_progress)
+            from werkzeug.utils import secure_filename
+            safe_title = secure_filename(yt.title)
+            if not safe_title: safe_title = "Media_File"
+            safe_title = safe_title[:100]
+            downloads[download_id]['title'] = safe_title
+            
+            if quality == 'png':
+                import requests
+                thumb_url = yt.thumbnail_url
+                filename = f"{download_id}_{safe_title}.png"
+                filepath = os.path.join(DOWNLOAD_DIR, filename)
+                with open(filepath, 'wb') as f:
+                    f.write(requests.get(thumb_url).content)
+                downloads[download_id]['filename'] = filepath
+            else:
+                res = quality if quality.endswith('p') else '720p'
+                if quality == 'best': res = '1080p'
+                if quality == '2k': res = '1440p'
+                
+                if quality == 'mp3':
+                    stream = yt.streams.filter(only_audio=True).order_by('abr').desc().first()
+                    a_file = stream.download(output_path=DOWNLOAD_DIR, filename=f"a_{download_id}.mp4")
+                    out_file = os.path.join(DOWNLOAD_DIR, f"{download_id}_{safe_title}.mp3")
+                    downloads[download_id]['progress'] = "100%"
+                    downloads[download_id]['speed'] = "Converting Audio..."
+                    import subprocess
+                    subprocess.run([FFMPEG_PATH, '-y', '-i', a_file, '-q:a', '0', '-map', 'a', out_file], check=True, capture_output=True)
+                    os.remove(a_file)
+                    downloads[download_id]['filename'] = out_file
+                else:
+                    video_stream = yt.streams.filter(res=res, type="video").first()
+                    if not video_stream:
+                        video_stream = yt.streams.filter(type="video").order_by('resolution').desc().first()
+                    audio_stream = yt.streams.filter(only_audio=True).order_by('abr').desc().first()
+                    
+                    v_file = video_stream.download(output_path=DOWNLOAD_DIR, filename=f"v_{download_id}.mp4")
+                    a_file = audio_stream.download(output_path=DOWNLOAD_DIR, filename=f"a_{download_id}.mp4")
+                    
+                    out_file = os.path.join(DOWNLOAD_DIR, f"{download_id}_{safe_title}.mp4")
+                    downloads[download_id]['progress'] = "100%"
+                    downloads[download_id]['speed'] = "Merging Video & Audio..."
+                    import subprocess
+                    subprocess.run([FFMPEG_PATH, '-y', '-i', v_file, '-i', a_file, '-c:v', 'copy', '-c:a', 'aac', out_file], check=True, capture_output=True)
+                    os.remove(v_file)
+                    os.remove(a_file)
+                    downloads[download_id]['filename'] = out_file
+            
+            downloads[download_id]['status'] = 'completed'
+            downloads[download_id]['progress'] = '100%'
+            downloads[download_id]['speed'] = 'Done'
+            return
+
         def ytdl_progress_hook(d):
             if d['status'] == 'downloading':
                 p = d.get('_percent_str', '0%').strip()
