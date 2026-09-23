@@ -65,8 +65,10 @@ def get_info():
             'quiet': True,
             'no_warnings': True,
             'extract_flat': True,
-            'extractor_args': {'youtube': {'player_client': ['android']}}
+            'extractor_args': {'youtube': {'player_client': ['web', 'ios', 'android']}}
         }
+        if os.path.exists('cookies.txt'):
+            ydl_opts['cookiefile'] = 'cookies.txt'
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             
@@ -110,9 +112,13 @@ def download_task(download_id, url, quality):
             'quiet': True,
             'no_warnings': True,
             'ffmpeg_location': FFMPEG_PATH,
-            'concurrent_fragment_downloads': 5,
-            'extractor_args': {'youtube': {'player_client': ['android']}}
+            'concurrent_fragment_downloads': 10,
+            'extractor_args': {'youtube': {'player_client': ['web', 'ios', 'android']}}
         }
+        
+        # Highly effective fix for YouTube bot detection: Use cookies if available
+        if os.path.exists('cookies.txt'):
+            ydl_opts['cookiefile'] = 'cookies.txt'
         
         if quality == 'mp3':
             ydl_opts['format'] = 'bestaudio/best'
