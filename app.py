@@ -151,6 +151,10 @@ def download_task(download_id, url, quality):
         # Highly effective fix for YouTube bot detection: Use cookies if available
         if os.path.exists('cookies.txt'):
             ydl_opts['cookiefile'] = 'cookies.txt'
+            # When using cookies, we must remove mobile clients from extractor_args because they don't support cookies
+            # yt-dlp master will automatically use the optimal web/default client with cookies
+            if 'extractor_args' in ydl_opts:
+                del ydl_opts['extractor_args']
         
         if quality == 'mp3':
             ydl_opts['format'] = 'bestaudio/best'
