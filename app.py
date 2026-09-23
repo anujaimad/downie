@@ -116,7 +116,18 @@ def download_task(download_id, url, quality):
                     downloads[download_id]['_last_time'] = current_time
                     downloads[download_id]['_last_bytes'] = bytes_downloaded
 
-            yt = YouTube(url, on_progress_callback=pytube_progress)
+            yt = None
+            clients = ['ANDROID', 'IOS', 'TV', 'MWEB', 'WEB', 'ANDROID_CREATOR', 'IOS_CREATOR']
+            for client in clients:
+                try:
+                    temp_yt = YouTube(url, client=client, on_progress_callback=pytube_progress)
+                    _ = temp_yt.streams # This verifies that the stream URL can be fetched without bot detection
+                    yt = temp_yt
+                    break
+                except Exception:
+                    pass
+            if not yt:
+                raise Exception("YouTube bot detection blocked all requests. Please upload cookies.txt")
             from werkzeug.utils import secure_filename
             safe_title = secure_filename(yt.title)
             if not safe_title: safe_title = "Media_File"
