@@ -88,91 +88,6 @@ def download_task(download_id, url, quality):
         downloads[download_id]['progress'] = '0%'
         downloads[download_id]['speed'] = 'Connecting...'
 
-        if 'youtube.com' in url or 'youtu.be' in url:
-            # Native API bypass for YouTube to completely avoid Datacenter IP Blocks!
-            import requests
-            import time
-            from werkzeug.utils import secure_filename
-            
-            q_map = {
-                'mp3': 'mp3',
-                '2k': '1440',
-                '1080p': '1080',
-                '720p': '720',
-                '480p': '480',
-                '360p': '360',
-                '240p': '360',
-                '144p': '360'
-            }
-            fmt = q_map.get(quality, '720')
-            
-            downloads[download_id]['speed'] = 'Processing on external server...'
-            r = requests.get(f"https://loader.to/ajax/download.php?url={url}&format={fmt}")
-            res = r.json()
-            if 'id' not in res:
-                raise Exception(f"Bypass Server Failed: {res.get('message', 'Unknown Error')}")
-                
-            task_id = res['id']
-            download_url = None
-            title = "YouTube_Video"
-            
-            while True:
-                p = requests.get(f"https://loader.to/ajax/progress.php?id={task_id}")
-                data = p.json()
-                
-                progress_val = data.get('progress', 0)
-                pct = (progress_val / 1000) * 100
-                if pct > 0:
-                    downloads[download_id]['progress'] = f"{pct:.1f}%"
-                    downloads[download_id]['speed'] = 'Downloading stream...'
-                
-                if data.get('success') == 1 and data.get('download_url'):
-                    download_url = data['download_url']
-                    title = data.get('title', 'YouTube_Video')
-                    break
-                    
-                time.sleep(1.5)
-                
-            if not download_url:
-                raise Exception("Failed to extract external download URL")
-                
-            safe_title = secure_filename(title)
-            if not safe_title: safe_title = "Media_File"
-            safe_title = safe_title[:100]
-            downloads[download_id]['title'] = safe_title
-            
-            ext = ".mp3" if quality == 'mp3' else ".mp4"
-            filename = f"{download_id}_{safe_title}{ext}"
-            filepath = os.path.join(DOWNLOAD_DIR, filename)
-            
-            downloads[download_id]['speed'] = 'Transferring to your device...'
-            # Stream the file to the Render server
-            with requests.get(download_url, stream=True) as r_stream:
-                r_stream.raise_for_status()
-                total_length = r_stream.headers.get('content-length')
-                
-                with open(filepath, 'wb') as f_out:
-                    if total_length is None: # no content length header
-                        f_out.write(r_stream.content)
-                        downloads[download_id]['progress'] = "100%"
-                    else:
-                        dl = 0
-                        total_length = int(total_length)
-                        for data in r_stream.iter_content(chunk_size=4096):
-                            dl += len(data)
-                            f_out.write(data)
-                            done = int(50 * dl / total_length)
-                            # Actually, just show percentage of the file transfer
-                            pct = (dl / total_length) * 100
-                            downloads[download_id]['progress'] = f"{pct:.1f}%"
-                            
-            downloads[download_id]['filename'] = filepath
-            downloads[download_id]['status'] = 'completed'
-            downloads[download_id]['progress'] = '100%'
-            downloads[download_id]['speed'] = 'Done'
-            return
-
-        # Fallback to yt-dlp for everything else (TikTok, Insta, FB, etc)
         def ytdl_progress_hook(d):
             if d['status'] == 'downloading':
                 p = d.get('_percent_str', '0%').strip()
@@ -196,6 +111,7 @@ def download_task(download_id, url, quality):
             'no_warnings': True,
             'ffmpeg_location': FFMPEG_PATH,
             'concurrent_fragment_downloads': 5,
+            'extractor_args': {'youtube': {'player_client': ['android']}}
         }
         
         if quality == 'mp3':
@@ -238,6 +154,7 @@ def download_task(download_id, url, quality):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             title = info.get('title', 'Media')
+            from werkzeug.utils import secure_filename
             safe_title = secure_filename(title)
             if not safe_title:
                 safe_title = "Media_File"
@@ -301,21 +218,31 @@ def get_progress(download_id):
 
 @app.route('/api/file/<download_id>', methods=['GET'])
 def get_file(download_id):
-    if download_id not in downloads or downloads[download_id].get('status') != 'completed':
+    matched_file = None
+    for f in os.listdir(DOWNLOAD_DIR):
+        if f.startswith(download_id):
+            matched_file = os.path.join(DOWNLOAD_DIR, f)
+            break
+            
+    if not matched_file:
         return jsonify({"error": "File not ready or not found"}), 404
         
-    filename = downloads[download_id].get('filename')
-    title = downloads[download_id].get('title', 'Media')
+    ext = os.path.splitext(matched_file)[1]
     
-    if filename and os.path.exists(filename):
-        ext = os.path.splitext(filename)[1]
-        download_name = f"{title}{ext}"
-        
-        response = send_from_directory(os.path.dirname(filename), os.path.basename(filename), as_attachment=True, download_name=download_name)
-        # Add security headers to the download to prevent execution
-        response.headers['X-Content-Type-Options'] = 'nosniff'
-        return response
-    return jsonify({"error": "File not found on disk"}), 404
+    title = "Media_File"
+    if download_id in downloads:
+        title = downloads[download_id].get('title', 'Media_File')
+    else:
+        basename = os.path.basename(matched_file)
+        # format is id_title.ext
+        title_part = basename[len(download_id)+1:-(len(ext))]
+        if title_part:
+            title = title_part
+
+    download_name = f"{title}{ext}"
+    response = send_from_directory(os.path.dirname(matched_file), os.path.basename(matched_file), as_attachment=True, download_name=download_name)
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
 
 if __name__ == '__main__':
     # Running in production mode (debug=False) prevents Remote Code Execution via Flask Debugger
