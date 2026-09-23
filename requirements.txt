@@ -5,5 +5,5 @@ imageio-ffmpeg
 pytubefix
 requests
 urllib3<2
-yt-dlp
+yt-dlp @ https://github.com/yt-dlp/yt-dlp/archive/master.zip
 imageio-ffmpeg
