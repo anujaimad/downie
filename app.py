@@ -297,3 +297,18 @@ if __name__ == '__main__':
     # Running in production mode (debug=False) prevents Remote Code Execution via Flask Debugger
     # Serving on 0.0.0.0 allows local Wi-Fi network access for mobile testing
     app.run(host='0.0.0.0', debug=False, port=8080)
+
+@app.route('/api/debug', methods=['GET'])
+def get_debug():
+    import sys
+    try:
+        import yt_dlp
+        ytdl_version = yt_dlp.version.__version__
+    except:
+        ytdl_version = "Not installed"
+    
+    return jsonify({
+        "python_version": sys.version,
+        "yt_dlp_version": ytdl_version,
+        "cookies_exist": os.path.exists('cookies.txt')
+    })
