@@ -7,6 +7,32 @@ from werkzeug.utils import secure_filename
 import yt_dlp
 import uuid
 import threading
+
+import time
+import shutil
+
+# Advanced Hack: Prevent Disk Space exhaustion on cloud servers (Render)
+def cleanup_old_files():
+    while True:
+        try:
+            current_time = time.time()
+            for filename in os.listdir(DOWNLOAD_DIR):
+                filepath = os.path.join(DOWNLOAD_DIR, filename)
+                # Check if file is older than 2 hours
+                if os.path.isfile(filepath) and current_time - os.path.getctime(filepath) > 7200:
+                    os.remove(filepath)
+            
+            # Cleanup memory dictionary
+            expired_ids = [did for did, ddata in downloads.items() if ddata.get('status') in ['completed', 'error'] and current_time - ddata.get('_start_time', current_time) > 7200]
+            for did in expired_ids:
+                del downloads[did]
+                
+        except Exception as e:
+            print(f"Cleanup error: {e}")
+        time.sleep(3600)
+
+cleanup_thread = threading.Thread(target=cleanup_old_files, daemon=True)
+cleanup_thread.start()
 import os
 import subprocess
 import imageio_ffmpeg
@@ -104,14 +130,22 @@ def download_task(download_id, url, quality):
 
         filepath_template = os.path.join(DOWNLOAD_DIR, f"{download_id}_%(title).100s.%(ext)s")
         
+        # Advanced Options: Bulletproof downloading configuration
         ydl_opts = {
             'outtmpl': filepath_template,
             'progress_hooks': [ytdl_progress_hook],
             'quiet': True,
             'no_warnings': True,
             'ffmpeg_location': FFMPEG_PATH,
-            'concurrent_fragment_downloads': 10,
-            'extractor_args': {'youtube': {'player_client': ['web', 'ios', 'android']}}
+            'concurrent_fragment_downloads': 5, # Reduced from 10 to prevent Out of Memory on Render free tier
+            'retries': 15, # High retries for flaky connections
+            'fragment_retries': 15,
+            'extractor_retries': 5,
+            'socket_timeout': 30, # Prevent hanging
+            'geo_bypass': True, # Bypass geographic restrictions
+            'nocheckcertificate': True, # Prevent SSL errors
+            'sleep_requests': 1, # Minor delay to avoid IP rate limits
+            'extractor_args': {'youtube': {'player_client': ['ios', 'android', 'web']}} # Fallback rotation
         }
         
         # Highly effective fix for YouTube bot detection: Use cookies if available
@@ -188,8 +222,11 @@ def download_task(download_id, url, quality):
             downloads[download_id]['speed'] = 'Done'
 
     except Exception as e:
+        error_msg = str(e)
+        if "Sign in to confirm" in error_msg or "reloaded" in error_msg:
+            error_msg = "Bot detection triggered. Please update your cookies.txt!"
         downloads[download_id]['status'] = 'error'
-        downloads[download_id]['error'] = str(e)
+        downloads[download_id]['error'] = error_msg
 
 @app.route('/api/download', methods=['POST'])
 def start_download():
@@ -206,7 +243,8 @@ def start_download():
         'progress': '0%',
         'speed': '',
         'url': url,
-        'quality': quality
+        'quality': quality,
+        '_start_time': time.time()
     }
     
     thread = threading.Thread(target=download_task, args=(download_id, url, quality))
