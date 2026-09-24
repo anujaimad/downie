@@ -145,6 +145,8 @@ def download_task(download_id, url, quality):
             'geo_bypass': True, # Bypass geographic restrictions
             'nocheckcertificate': True, # Prevent SSL errors
             'sleep_requests': 1, # Minor delay to avoid IP rate limits
+            'source_address': '0.0.0.0', # Try forcing IPv4/IPv6
+            'force_ipv4': False,
             'extractor_args': {'youtube': {'player_client': ['ios', 'android', 'web']}} # Fallback rotation
         }
         
