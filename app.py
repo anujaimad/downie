@@ -43,6 +43,14 @@ from urllib.parse import urlparse
 app = Flask(__name__, static_folder='.', static_url_path='')
 CORS(app)
 
+@app.after_request
+def apply_security_headers(response):
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+    return response
+
 DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
@@ -60,12 +68,7 @@ def is_valid_url(url):
 
 @app.route('/')
 def serve_index():
-    # Set secure headers
-    response = app.send_static_file('index.html')
-    response.headers['X-Content-Type-Options'] = 'nosniff'
-    response.headers['X-Frame-Options'] = 'DENY'
-    response.headers['X-XSS-Protection'] = '1; mode=block'
-    return response
+    return app.send_static_file('index.html')
 
 @app.route('/api/info', methods=['POST'])
 def get_info():
@@ -91,7 +94,7 @@ def get_info():
             'quiet': True,
             'no_warnings': True,
             'extract_flat': True,
-            'extractor_args': {'youtube': {'player_client': ['web', 'ios', 'android']}}
+            'extractor_args': {'youtube': {'player_client': ['tv', 'ios', 'android', 'web']}}
         }
         if os.path.exists('cookies.txt'):
             ydl_opts['cookiefile'] = 'cookies.txt'
@@ -137,27 +140,25 @@ def download_task(download_id, url, quality):
             'quiet': True,
             'no_warnings': True,
             'ffmpeg_location': FFMPEG_PATH,
-            'concurrent_fragment_downloads': 5, # Reduced from 10 to prevent Out of Memory on Render free tier
-            'retries': 15, # High retries for flaky connections
+            'concurrent_fragment_downloads': 5,
+            'retries': 15,
             'fragment_retries': 15,
             'extractor_retries': 5,
-            'socket_timeout': 30, # Prevent hanging
-            'geo_bypass': True, # Bypass geographic restrictions
-            'nocheckcertificate': True, # Prevent SSL errors
-            'sleep_requests': 1, # Minor delay to avoid IP rate limits
-            'source_address': '0.0.0.0', # Try forcing IPv4/IPv6
+            'socket_timeout': 30,
+            'geo_bypass': True,
+            'nocheckcertificate': True,
+            'sleep_requests': 1,
+            'source_address': '0.0.0.0',
             'force_ipv4': False,
-            'extractor_args': {'youtube': {'player_client': ['ios', 'android', 'web']}} # Fallback rotation
+            # Use clients that bypass PO Token and bot detection best
+            'extractor_args': {'youtube': {'player_client': ['tv', 'ios', 'android', 'web']}}
         }
         
-        # Highly effective fix for YouTube bot detection: Use cookies if available
         if os.path.exists('cookies.txt'):
             ydl_opts['cookiefile'] = 'cookies.txt'
-            # When using cookies, we must remove mobile clients from extractor_args because they don't support cookies
-            # yt-dlp master will automatically use the optimal web/default client with cookies
-            if 'extractor_args' in ydl_opts:
-                del ydl_opts['extractor_args']
         
+        # Force mp4 video and m4a audio to allow direct ffmpeg muxing without transcoding!
+        # Transcoding (e.g. webm to mp4) uses huge CPU/RAM and crashes cloud servers!
         if quality == 'mp3':
             ydl_opts['format'] = 'bestaudio/best'
             ydl_opts['postprocessors'] = [{
@@ -166,34 +167,34 @@ def download_task(download_id, url, quality):
                 'preferredquality': '320',
             }]
         elif quality == 'best':
-            ydl_opts['format'] = 'bestvideo+bestaudio/best'
+            ydl_opts['format'] = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
             ydl_opts['merge_output_format'] = 'mp4'
         elif quality == '2k':
-            ydl_opts['format'] = 'bestvideo[height<=1440]+bestaudio/best'
+            ydl_opts['format'] = 'bestvideo[ext=mp4][height<=1440]+bestaudio[ext=m4a]/best[ext=mp4][height<=1440]/best'
             ydl_opts['merge_output_format'] = 'mp4'
         elif quality == '1080p':
-            ydl_opts['format'] = 'bestvideo[height<=1080]+bestaudio/best'
+            ydl_opts['format'] = 'bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4][height<=1080]/best'
             ydl_opts['merge_output_format'] = 'mp4'
         elif quality == '720p':
-            ydl_opts['format'] = 'bestvideo[height<=720]+bestaudio/best'
+            ydl_opts['format'] = 'bestvideo[ext=mp4][height<=720]+bestaudio[ext=m4a]/best[ext=mp4][height<=720]/best'
             ydl_opts['merge_output_format'] = 'mp4'
         elif quality == '480p':
-            ydl_opts['format'] = 'bestvideo[height<=480]+bestaudio/best'
+            ydl_opts['format'] = 'bestvideo[ext=mp4][height<=480]+bestaudio[ext=m4a]/best[ext=mp4][height<=480]/best'
             ydl_opts['merge_output_format'] = 'mp4'
         elif quality == '360p':
-            ydl_opts['format'] = 'bestvideo[height<=360]+bestaudio/best'
+            ydl_opts['format'] = 'bestvideo[ext=mp4][height<=360]+bestaudio[ext=m4a]/best[ext=mp4][height<=360]/best'
             ydl_opts['merge_output_format'] = 'mp4'
         elif quality == '240p':
-            ydl_opts['format'] = 'bestvideo[height<=240]+bestaudio/best'
+            ydl_opts['format'] = 'bestvideo[ext=mp4][height<=240]+bestaudio[ext=m4a]/best[ext=mp4][height<=240]/best'
             ydl_opts['merge_output_format'] = 'mp4'
         elif quality == '144p':
-            ydl_opts['format'] = 'bestvideo[height<=144]+bestaudio/best'
+            ydl_opts['format'] = 'bestvideo[ext=mp4][height<=144]+bestaudio[ext=m4a]/best[ext=mp4][height<=144]/best'
             ydl_opts['merge_output_format'] = 'mp4'
         elif quality == 'png':
             ydl_opts['skip_download'] = True
         else:
-            ydl_opts['format'] = 'best'
-        
+            ydl_opts['format'] = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
+            
         import yt_dlp
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -276,7 +277,16 @@ def get_file(download_id):
             break
             
     if not matched_file:
-        return jsonify({"error": "File not ready or not found"}), 404
+        return """
+        <html>
+            <head><title>File Not Found</title><style>body{font-family:sans-serif;text-align:center;margin-top:50px;color:#333;background:#f9f9f9;} a{color:#2563EB;text-decoration:none;}</style></head>
+            <body>
+                <h2>File expired or not found!</h2>
+                <p>The server may have restarted or the file was deleted to save space.</p>
+                <a href="/">Go back and try downloading again</a>
+            </body>
+        </html>
+        """, 404
         
     ext = os.path.splitext(matched_file)[1]
     
@@ -291,9 +301,7 @@ def get_file(download_id):
             title = title_part
 
     download_name = f"{title}{ext}"
-    response = send_from_directory(os.path.dirname(matched_file), os.path.basename(matched_file), as_attachment=True, download_name=download_name)
-    response.headers['X-Content-Type-Options'] = 'nosniff'
-    return response
+    return send_from_directory(os.path.dirname(matched_file), os.path.basename(matched_file), as_attachment=True, download_name=download_name)
 
 if __name__ == '__main__':
     # Running in production mode (debug=False) prevents Remote Code Execution via Flask Debugger
