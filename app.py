@@ -7,9 +7,8 @@ import re
 import sys
 import time
 import uuid
+import json
 import threading
-import subprocess
-import shutil
 import imageio_ffmpeg
 from urllib.parse import urlparse
 
@@ -18,36 +17,58 @@ from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 
-# ─────────────────────────────────────────────
-#  App bootstrap
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+#  Bootstrap
+# ─────────────────────────────────────────────────────────────────────────────
 app = Flask(__name__, static_folder='.', static_url_path='')
 CORS(app)
 
 DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-
 FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
+downloads: dict = {}
 
-downloads = {}   # in-memory download state
+# ── Restore cookies.txt from environment variable (for Render.com) ────────────
+#
+#  On Render: Dashboard → Environment → add key YOUTUBE_COOKIES
+#  Value: paste the entire text content of your cookies.txt file.
+#
+#  How to get fresh cookies (do this every few weeks):
+#    1. Install the "Get cookies.txt LOCALLY" Chrome/Brave extension
+#    2. Go to youtube.com while logged in
+#    3. Click the extension → Export → copy the text
+#    4. Paste into Render YOUTUBE_COOKIES environment variable
+#
+_cookies_env = os.environ.get('YOUTUBE_COOKIES', '').strip()
+COOKIES_FILE  = 'cookies.txt'
 
-# ─────────────────────────────────────────────
+if _cookies_env:
+    with open(COOKIES_FILE, 'w') as _fh:
+        _fh.write(_cookies_env)
+    print('[auth] ✅ Loaded cookies.txt from YOUTUBE_COOKIES env var', flush=True)
+elif os.path.exists(COOKIES_FILE):
+    print('[auth] 📄 Using existing cookies.txt file', flush=True)
+else:
+    print('[auth] ⚠️  No cookies — bot detection may occur on Render', flush=True)
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  Security headers on every response
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 @app.after_request
 def apply_security_headers(response):
-    response.headers['X-Content-Type-Options']        = 'nosniff'
-    response.headers['X-Frame-Options']               = 'DENY'
-    response.headers['X-XSS-Protection']              = '1; mode=block'
-    response.headers['Strict-Transport-Security']     = 'max-age=31536000; includeSubDomains'
-    response.headers['Referrer-Policy']               = 'strict-origin-when-cross-origin'
-    response.headers['Permissions-Policy']            = 'geolocation=(), microphone=()'
+    h = response.headers
+    h['X-Content-Type-Options']    = 'nosniff'
+    h['X-Frame-Options']           = 'DENY'
+    h['X-XSS-Protection']          = '1; mode=block'
+    h['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+    h['Referrer-Policy']           = 'strict-origin-when-cross-origin'
+    h['Permissions-Policy']        = 'geolocation=(), microphone=()'
     return response
 
-# ─────────────────────────────────────────────
-#  Background cleanup  (disk + memory)
-# ─────────────────────────────────────────────
-def cleanup_old_files():
+# ─────────────────────────────────────────────────────────────────────────────
+#  Background disk/memory cleanup
+# ─────────────────────────────────────────────────────────────────────────────
+def _cleanup_loop():
     while True:
         try:
             now = time.time()
@@ -58,7 +79,6 @@ def cleanup_old_files():
                         os.remove(fpath)
                     except Exception:
                         pass
-            # Remove stale download records
             stale = [
                 did for did, d in list(downloads.items())
                 if d.get('status') in ('completed', 'error')
@@ -67,14 +87,14 @@ def cleanup_old_files():
             for did in stale:
                 downloads.pop(did, None)
         except Exception as e:
-            print(f"[cleanup] {e}", flush=True)
+            print(f'[cleanup] {e}', flush=True)
         time.sleep(3600)
 
-threading.Thread(target=cleanup_old_files, daemon=True).start()
+threading.Thread(target=_cleanup_loop, daemon=True).start()
 
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 #  Helpers
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 def is_valid_url(url: str) -> bool:
     try:
         r = urlparse(url)
@@ -83,79 +103,68 @@ def is_valid_url(url: str) -> bool:
         return False
 
 
-def build_format_string(quality: str) -> str:
-    """Return a yt-dlp format string that avoids transcoding.
+def _format_string(quality: str) -> str:
+    """Prefer H264+AAC → ffmpeg mux-only (no transcoding, zero CPU hit)."""
+    h_map = {'best': None, '2k': 1440, '1080p': 1080, '720p': 720,
+             '480p': 480, '360p': 360, '240p': 240, '144p': 144}
+    h = h_map.get(quality)
+    if h is None:
+        return 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best'
+    return (
+        f'bestvideo[ext=mp4][height<={h}]+bestaudio[ext=m4a]'
+        f'/bestvideo[height<={h}]+bestaudio'
+        f'/best[height<={h}]/best'
+    )
 
-    We always try to get H264 video + AAC audio so ffmpeg just muxes
-    (copy mode) instead of re-encoding — this saves massive CPU/RAM.
+
+def _has_valid_cookies() -> bool:
+    return os.path.exists(COOKIES_FILE) and os.path.getsize(COOKIES_FILE) > 100
+
+
+def _base_opts(extra: dict = None) -> dict:
+    """Build yt-dlp options.
+
+    Strategy:
+    - With cookies  → use web_safari client (most compatible with cookies)
+    - Without cookies → use mweb/ios/android clients (no PO-token required)
     """
-    height_map = {
-        'best':  None,
-        '2k':    1440,
-        '1080p': 1080,
-        '720p':  720,
-        '480p':  480,
-        '360p':  360,
-        '240p':  240,
-        '144p':  144,
-    }
-    if quality in height_map:
-        h = height_map[quality]
-        if h is None:
-            return 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best'
-        return (
-            f'bestvideo[ext=mp4][height<={h}]+bestaudio[ext=m4a]'
-            f'/bestvideo[height<={h}]+bestaudio'
-            f'/best[height<={h}]/best'
-        )
-    return 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best'
-
-
-# ─────────────────────────────────────────────
-#  YouTube bot-detection bypass strategies
-#
-#  YouTube checks for a Proof-Of-Origin (PO) token on the web client.
-#  The clients below skip or work around that check:
-#    • mweb  — mobile web, no PO token required
-#    • ios   — Apple iOS app, no PO token required
-#    • android — Android app, no PO token required
-#    • tv_embedded — Smart-TV embedded player, often allowed
-#
-#  player_skip=['webpage','configs'] tells yt-dlp not to fetch the
-#  main player JS, which is what triggers the PO-token handshake.
-# ─────────────────────────────────────────────
-BYPASS_EXTRACTOR_ARGS = {
-    'youtube': {
-        'player_client': ['mweb', 'ios', 'android', 'tv_embedded'],
-        'player_skip': ['webpage', 'configs'],
-    }
-}
-
-
-def make_ydl_opts(extra: dict = None) -> dict:
-    """Return a safe, bot-resistant base options dict for yt-dlp."""
     opts = {
-        'quiet':                       True,
-        'no_warnings':                 True,
-        'geo_bypass':                  True,
-        'nocheckcertificate':          True,
-        'socket_timeout':              60,
-        'retries':                     10,
-        'fragment_retries':            10,
-        'extractor_retries':           5,
-        'sleep_requests':              1,
-        'ffmpeg_location':             FFMPEG_PATH,
+        'quiet':                         True,
+        'no_warnings':                   True,
+        'geo_bypass':                    True,
+        'nocheckcertificate':            True,
+        'socket_timeout':                60,
+        'retries':                       10,
+        'fragment_retries':              10,
+        'extractor_retries':             5,
+        'sleep_requests':                1,
+        'ffmpeg_location':               FFMPEG_PATH,
         'concurrent_fragment_downloads': 4,
-        'extractor_args':              BYPASS_EXTRACTOR_ARGS,
     }
+
+    if _has_valid_cookies():
+        opts['cookiefile'] = COOKIES_FILE
+        # web_safari works best with cookies; ios/android don't support browser cookies
+        opts['extractor_args'] = {
+            'youtube': {'player_client': ['web_safari', 'web', 'mweb']}
+        }
+    else:
+        # Mobile/embedded clients skip PO-token check
+        opts['extractor_args'] = {
+            'youtube': {
+                'player_client': ['mweb', 'ios', 'android', 'tv_embedded'],
+                'player_skip':   ['webpage', 'configs'],
+            }
+        }
+
     if extra:
         opts.update(extra)
     return opts
 
 
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 #  Routes
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 @app.route('/')
 def serve_index():
     return app.send_static_file('index.html')
@@ -164,48 +173,39 @@ def serve_index():
 @app.route('/api/info', methods=['POST'])
 def get_info():
     data = request.json or {}
-    url  = data.get('url', '').strip()
+    url  = (data.get('url') or '').strip()
 
     if not url or not is_valid_url(url):
         return jsonify({'error': 'Invalid URL provided.'}), 400
 
     try:
-        # Fast path: YouTube oEmbed (no yt-dlp needed)
+        # Fast path: YouTube oEmbed (no yt-dlp, instant)
         if 'youtube.com' in url or 'youtu.be' in url:
             import requests as req
-            r = req.get(
-                f'https://www.youtube.com/oembed?url={url}&format=json',
-                timeout=10
-            )
+            r = req.get(f'https://www.youtube.com/oembed?url={url}&format=json', timeout=10)
             if r.status_code == 200:
                 d = r.json()
-                return jsonify({
-                    'title':     d.get('title', 'Unknown Title'),
-                    'thumbnail': d.get('thumbnail_url', ''),
-                })
+                return jsonify({'title': d.get('title', 'Unknown Title'),
+                                'thumbnail': d.get('thumbnail_url', '')})
 
-        # Fallback: yt-dlp extract_flat
-        opts = make_ydl_opts({'extract_flat': True})
+        opts = _base_opts({'extract_flat': True})
         with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(url, download=False)
+            info  = ydl.extract_info(url, download=False)
             thumb = info.get('thumbnail') or (
                 f"https://img.youtube.com/vi/{info['id']}/maxresdefault.jpg"
                 if info.get('id') else ''
             )
-            return jsonify({
-                'title':     info.get('title', 'Unknown Title'),
-                'thumbnail': thumb,
-            })
+            return jsonify({'title': info.get('title', 'Unknown Title'), 'thumbnail': thumb})
 
     except Exception as e:
-        return jsonify({'error': f'Failed to fetch media info: {str(e)}'}), 500
+        return jsonify({'error': f'Failed to fetch: {str(e)}'}), 500
 
 
 @app.route('/api/download', methods=['POST'])
 def start_download():
     data    = request.json or {}
-    url     = data.get('url', '').strip()
-    quality = data.get('quality', '720p')
+    url     = (data.get('url') or '').strip()
+    quality = (data.get('quality') or '720p').strip()
 
     if not url or not is_valid_url(url):
         return jsonify({'error': 'Invalid URL provided.'}), 400
@@ -219,13 +219,7 @@ def start_download():
         'quality':     quality,
         '_start_time': time.time(),
     }
-
-    thread = threading.Thread(
-        target=download_task,
-        args=(download_id, url, quality),
-        daemon=True
-    )
-    thread.start()
+    threading.Thread(target=_download_task, args=(download_id, url, quality), daemon=True).start()
     return jsonify({'download_id': download_id})
 
 
@@ -238,33 +232,29 @@ def get_progress(download_id):
 
 @app.route('/api/file/<download_id>', methods=['GET'])
 def get_file(download_id):
-    matched = None
-    for fname in os.listdir(DOWNLOAD_DIR):
-        if fname.startswith(download_id):
-            matched = os.path.join(DOWNLOAD_DIR, fname)
-            break
-
+    matched = next(
+        (os.path.join(DOWNLOAD_DIR, f)
+         for f in os.listdir(DOWNLOAD_DIR) if f.startswith(download_id)),
+        None,
+    )
     if not matched:
         return (
-            """<!doctype html><html><head><title>File Expired</title>
-            <style>body{font-family:sans-serif;text-align:center;margin-top:60px;
-            background:#f9f9f9;color:#333;}a{color:#2563EB}</style></head>
-            <body><h2>⚠️ File expired or not found</h2>
-            <p>The server may have restarted, or the file was deleted to free disk space.</p>
-            <a href="/">← Go back and download again</a></body></html>""",
+            '<!doctype html><html><head><title>File Expired</title>'
+            '<style>body{font-family:sans-serif;text-align:center;margin-top:60px;'
+            'background:#f9f9f9;color:#333}a{color:#2563EB}</style></head>'
+            '<body><h2>⚠️ File expired or not found</h2>'
+            '<p>The server restarted or deleted the file to free space.</p>'
+            '<a href="/">← Go back and download again</a></body></html>',
             404,
         )
-
     ext   = os.path.splitext(matched)[1]
     title = 'Media_File'
     if download_id in downloads:
         title = downloads[download_id].get('title', 'Media_File')
     else:
-        base  = os.path.basename(matched)
-        part  = base[len(download_id) + 1: -len(ext)]
+        part = os.path.basename(matched)[len(download_id) + 1: -len(ext)]
         if part:
             title = part
-
     return send_from_directory(
         os.path.dirname(matched),
         os.path.basename(matched),
@@ -280,142 +270,155 @@ def get_debug():
     except Exception:
         ver = 'unknown'
     return jsonify({
-        'python_version': sys.version,
-        'yt_dlp_version': ver,
-        'ffmpeg_path':    FFMPEG_PATH,
+        'python_version':  sys.version,
+        'yt_dlp_version':  ver,
+        'ffmpeg_path':     FFMPEG_PATH,
+        'cookies_present': _has_valid_cookies(),
     })
 
 
-# ─────────────────────────────────────────────
-#  Core download logic
-# ─────────────────────────────────────────────
-def download_task(download_id: str, url: str, quality: str):
-    """Download video in a background thread.
-
-    Strategy:
-      1. Try mweb/ios/android clients (no PO token required).
-      2. If that still fails with bot detection, try with tv_embedded only.
-      3. If all else fails, surface a clear human-readable error.
-    """
+# ─────────────────────────────────────────────────────────────────────────────
+#  Download worker
+# ─────────────────────────────────────────────────────────────────────────────
+def _download_task(download_id: str, url: str, quality: str):
     try:
         downloads[download_id]['status'] = 'downloading'
+        ansi = re.compile(r'\x1b\[[0-9;]*m')
 
-        def progress_hook(d):
+        def hook(d):
             if downloads[download_id]['status'] != 'downloading':
                 return
             if d['status'] == 'downloading':
-                p = re.sub(r'\x1b\[[0-9;]*m', '', d.get('_percent_str', '0%')).strip()
-                s = re.sub(r'\x1b\[[0-9;]*m', '', d.get('_speed_str',  '')).strip()
-                downloads[download_id]['progress'] = p
-                downloads[download_id]['speed']    = s
+                p = ansi.sub('', d.get('_percent_str', '0%')).strip()
+                s = ansi.sub('', d.get('_speed_str', '')).strip()
+                downloads[download_id].update(progress=p, speed=s)
             elif d['status'] == 'finished':
-                downloads[download_id]['progress'] = '100%'
-                downloads[download_id]['speed']    = 'Processing…'
+                downloads[download_id].update(progress='100%', speed='Processing…')
 
         outtmpl = os.path.join(DOWNLOAD_DIR, f'{download_id}_%(title).100s.%(ext)s')
 
-        # Build format selector
         if quality == 'mp3':
-            fmt  = 'bestaudio/best'
-            pp   = [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '320'}]
-            mfmt = None
+            fmt, mfmt, pp, skip_dl = ('bestaudio/best', None,
+                [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '320'}],
+                False)
         elif quality == 'png':
-            fmt  = None
-            pp   = []
-            mfmt = None
+            fmt, mfmt, pp, skip_dl = None, None, [], True
         else:
-            fmt  = build_format_string(quality)
-            pp   = []
-            mfmt = 'mp4'
+            fmt, mfmt, pp, skip_dl = _format_string(quality), 'mp4', [], False
 
-        base_extra = {
-            'outtmpl':          outtmpl,
-            'progress_hooks':   [progress_hook],
+        quality_extra = {
+            'outtmpl':             outtmpl,
+            'progress_hooks':      [hook],
             'merge_output_format': mfmt,
         }
         if fmt:
-            base_extra['format'] = fmt
+            quality_extra['format'] = fmt
         if pp:
-            base_extra['postprocessors'] = pp
-        if quality == 'png':
-            base_extra['skip_download'] = True
+            quality_extra['postprocessors'] = pp
+        if skip_dl:
+            quality_extra['skip_download'] = True
 
-        # ── Attempt 1: default bypass clients ──────────────────────────
-        opts = make_ydl_opts(base_extra)
-        success = _try_download(download_id, url, quality, opts)
+        # ── Attempt 1: primary strategy (with cookies if available) ──────────
+        ok, err = _attempt(download_id, url, quality, _base_opts(quality_extra))
 
-        # ── Attempt 2: tv_embedded only, no player_skip ────────────────
-        if not success:
-            print(f'[{download_id}] Attempt 1 failed — retrying with tv_embedded only', flush=True)
-            opts2 = make_ydl_opts(base_extra)
-            opts2['extractor_args'] = {
-                'youtube': {'player_client': ['tv_embedded', 'mweb']}
-            }
-            success = _try_download(download_id, url, quality, opts2)
+        # ── Attempt 2: cookieless mobile clients fallback ────────────────────
+        if not ok:
+            print(f'[{download_id}] Attempt 1 failed ({err[:80]}) → trying cookieless mobile clients', flush=True)
+            fallback_opts = dict(quality_extra)
+            fallback_opts.update({
+                'quiet':          True,
+                'no_warnings':    True,
+                'geo_bypass':     True,
+                'nocheckcertificate': True,
+                'socket_timeout': 60,
+                'retries':        10,
+                'fragment_retries': 10,
+                'ffmpeg_location': FFMPEG_PATH,
+                'concurrent_fragment_downloads': 4,
+                'extractor_args': {
+                    'youtube': {
+                        'player_client': ['mweb', 'ios', 'android'],
+                        'player_skip':   ['webpage', 'configs'],
+                    }
+                },
+            })
+            ok, err = _attempt(download_id, url, quality, fallback_opts)
 
-        if not success:
+        # ── Attempt 3: tv_embedded only ───────────────────────────────────────
+        if not ok:
+            print(f'[{download_id}] Attempt 2 failed ({err[:80]}) → trying tv_embedded', flush=True)
+            tv_opts = dict(quality_extra)
+            tv_opts.update({
+                'quiet':          True,
+                'no_warnings':    True,
+                'geo_bypass':     True,
+                'nocheckcertificate': True,
+                'socket_timeout': 60,
+                'retries':        10,
+                'fragment_retries': 10,
+                'ffmpeg_location': FFMPEG_PATH,
+                'concurrent_fragment_downloads': 4,
+                'extractor_args': {'youtube': {'player_client': ['tv_embedded']}},
+            })
+            ok, err = _attempt(download_id, url, quality, tv_opts)
+
+        if not ok:
             raise RuntimeError(
-                'YouTube bot detection blocked all download attempts. '
-                'Please export fresh cookies from your browser and upload them to the server as cookies.txt. '
-                'See: https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp'
+                'YouTube is blocking this server\'s IP address.\n\n'
+                'To fix permanently:\n'
+                '1. Install the "Get cookies.txt LOCALLY" extension in your browser\n'
+                '2. Go to youtube.com while logged in to your Google account\n'
+                '3. Click the extension → Export cookies\n'
+                '4. Go to Render.com → Your Service → Environment\n'
+                '5. Add: Key = YOUTUBE_COOKIES, Value = (paste the cookies text)\n'
+                '6. Click Save and Render will redeploy automatically.'
             )
 
-        # ── Find the downloaded file ────────────────────────────────────
-        found = None
-        for fname in os.listdir(DOWNLOAD_DIR):
-            if fname.startswith(download_id):
-                found = os.path.join(DOWNLOAD_DIR, fname)
-                break
-        if not found and quality != 'png':
-            raise RuntimeError('Download appeared to finish but file was not found on disk.')
+        if quality != 'png':
+            found = next(
+                (os.path.join(DOWNLOAD_DIR, f)
+                 for f in os.listdir(DOWNLOAD_DIR) if f.startswith(download_id)),
+                None,
+            )
+            if not found:
+                raise RuntimeError('Download finished but output file not found on disk.')
 
-        downloads[download_id]['status']   = 'completed'
-        downloads[download_id]['progress'] = '100%'
-        downloads[download_id]['speed']    = 'Done'
+        downloads[download_id].update(status='completed', progress='100%', speed='Done')
 
     except Exception as e:
-        msg = str(e)
-        downloads[download_id]['status'] = 'error'
-        downloads[download_id]['error']  = msg
-        print(f'[{download_id}] ERROR: {msg}', flush=True)
+        downloads[download_id].update(status='error', error=str(e))
+        print(f'[{download_id}] FATAL: {e}', flush=True)
 
 
-def _try_download(download_id: str, url: str, quality: str, opts: dict) -> bool:
-    """Attempt a single download with the given opts. Returns True on success."""
+def _attempt(download_id: str, url: str, quality: str, opts: dict):
+    """Single download attempt. Returns (success, error_str)."""
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
-            # Extract info first to get title
-            info = ydl.extract_info(url, download=False)
+            info       = ydl.extract_info(url, download=False)
             title      = info.get('title', 'Media')
-            safe_title = secure_filename(title)[:100] or 'Media_File'
+            safe_title = (secure_filename(title) or 'Media_File')[:100]
             downloads[download_id]['title'] = safe_title
 
             if quality == 'png':
                 import requests as req
-                thumb_url = info.get('thumbnail')
-                if not thumb_url:
-                    raise ValueError('No thumbnail URL found in video metadata')
+                thumb = info.get('thumbnail', '')
+                if not thumb:
+                    raise ValueError('No thumbnail URL in metadata.')
                 fpath = os.path.join(DOWNLOAD_DIR, f'{download_id}_{safe_title}.png')
                 with open(fpath, 'wb') as fh:
-                    fh.write(req.get(thumb_url, timeout=30).content)
+                    fh.write(req.get(thumb, timeout=30).content)
                 downloads[download_id]['filename'] = fpath
             else:
                 ydl.download([url])
-
-        return True
-
+        return True, ''
     except Exception as e:
-        err = str(e)
-        # Surface bot-detection clearly but don't stop the caller from retrying
-        if 'Sign in to confirm' in err or 'bot' in err.lower() or 'PO Token' in err:
-            print(f'[{download_id}] Bot detection: {err[:120]}', flush=True)
-            return False
-        # Any other error (e.g. private video, unsupported site) — re-raise
-        raise
+        msg = str(e)
+        bot_signals = ('sign in to confirm', 'bot', 'po token', 'not a robot')
+        if any(s in msg.lower() for s in bot_signals):
+            return False, msg   # retriable
+        raise                   # hard error → bubble up
 
 
-# ─────────────────────────────────────────────
-#  Entry point
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 if __name__ == '__main__':
     app.run(host='0.0.0.0', debug=False, port=8080)
