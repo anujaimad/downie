@@ -1,7 +1,12 @@
 venv/
+venv311/
 downloads/
 __pycache__/
 .DS_Store
+cookies.txt
+cookies_old.txt
+*.log
+
 venv/
 downloads/
 __pycache__/
