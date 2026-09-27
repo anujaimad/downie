@@ -104,16 +104,39 @@ def is_valid_url(url: str) -> bool:
 
 
 def _format_string(quality: str) -> str:
-    """Prefer H264+AAC → ffmpeg mux-only (no transcoding, zero CPU hit)."""
+    """Build a robust format selector with deep fallback chain.
+
+    Priority: H264+AAC (mux-only) → any video+audio → best available.
+    The final /best ensures SOMETHING always downloads regardless of
+    which formats YouTube provides for the specific video.
+    """
     h_map = {'best': None, '2k': 1440, '1080p': 1080, '720p': 720,
              '480p': 480, '360p': 360, '240p': 240, '144p': 144}
     h = h_map.get(quality)
     if h is None:
-        return 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best'
+        return (
+            'bestvideo[ext=mp4]+bestaudio[ext=m4a]'
+            '/bestvideo[ext=mp4]+bestaudio'
+            '/bestvideo+bestaudio[ext=m4a]'
+            '/bestvideo+bestaudio'
+            '/best'
+        )
     return (
+        # 1st choice: H264 video + AAC audio at desired height (mux-only, fastest)
         f'bestvideo[ext=mp4][height<={h}]+bestaudio[ext=m4a]'
+        # 2nd: any mp4 video + any audio at desired height
+        f'/bestvideo[ext=mp4][height<={h}]+bestaudio'
+        # 3rd: any video + AAC at desired height
+        f'/bestvideo[height<={h}]+bestaudio[ext=m4a]'
+        # 4th: any video + any audio at desired height (e.g. webm/VP9)
         f'/bestvideo[height<={h}]+bestaudio'
-        f'/best[height<={h}]/best'
+        # 5th: combined format at desired height
+        f'/best[height<={h}]'
+        # 6th: best video+audio of ANY height (relaxed resolution constraint)
+        '/bestvideo[ext=mp4]+bestaudio[ext=m4a]'
+        '/bestvideo+bestaudio'
+        # Final guaranteed fallback
+        '/best'
     )
 
 
