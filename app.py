@@ -218,7 +218,19 @@ def download_task(download_id, url, quality):
                 else:
                     raise Exception("No thumbnail found")
             else:
-                ydl.download([url])
+                try:
+                    ydl.download([url])
+                except Exception as dl_e:
+                    # Retry without cookies if bot detection hits
+                    if "Sign in to confirm" in str(dl_e) and 'cookiefile' in ydl_opts:
+                        print("Bot detection with cookies! Retrying without cookies...")
+                        del ydl_opts['cookiefile']
+                        # Re-instantiate YoutubeDL without cookies
+                        with yt_dlp.YoutubeDL(ydl_opts) as ydl_retry:
+                            ydl_retry.download([url])
+                    else:
+                        raise dl_e
+                
                 for f in os.listdir(DOWNLOAD_DIR):
                     if f.startswith(download_id):
                         downloads[download_id]['filename'] = os.path.join(DOWNLOAD_DIR, f)
